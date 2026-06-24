@@ -1,7 +1,7 @@
 package main
 
 import (
-	dbpkg "bracelet-cicd/db"
+	dbpkg "bracelet-cicd/internal/db"
 	"context"
 	"encoding/json"
 	"io"
