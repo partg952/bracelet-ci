@@ -1,31 +1,31 @@
-# Dependencies
-vendor/
-
-# Build output
-/bin/
+# Binaries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, build artifacts
 *.test
 *.out
-*.prof
+*.i*86
+*.x86_64
+*.hex
+/bin/
+/sbin/
 
-# IDE
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories
+vendor/
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
-Thumbs.db
 
-# Environment
+
 .env
-.env.local
-.env.*.local

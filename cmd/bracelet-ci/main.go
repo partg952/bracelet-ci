@@ -1,7 +1,7 @@
 package main
 
 import (
-	dbpkg "bracelet-cicd/internal/db"
+	dbpkg "bracelet-cicd/internal/bracelet-ci/db"
 	"context"
 	"encoding/json"
 	"io"
@@ -71,7 +71,7 @@ func webhookHandler(dbInst *dbpkg.DBInstance, client *redis.Client) gin.HandlerF
 }
 
 func init() {
-	godotenv.Load()
+	godotenv.Load("../../.env")
 }
 func main() {
 	dbInst, err := dbpkg.New(os.Getenv("DATABASE_URL"))
