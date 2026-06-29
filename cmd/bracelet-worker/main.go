@@ -14,7 +14,7 @@ import (
 
 
 func init() {
-	godotenv.Load()
+	godotenv.Load("../../.env")
 }
 
 func main() {
