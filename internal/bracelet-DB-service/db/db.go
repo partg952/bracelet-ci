@@ -13,6 +13,16 @@ type DBInstance struct {
 	Conn *pgxpool.Pool
 }
 
+type rowsWithCancel struct {
+	pgx.Rows
+	cancel context.CancelFunc
+}
+
+func (rows *rowsWithCancel) Close() {
+	rows.Rows.Close()
+	rows.cancel()
+}
+
 func New(DBUrl string) (DBInstance, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
@@ -40,18 +50,16 @@ func New(DBUrl string) (DBInstance, error) {
 
 func (db *DBInstance) FetchRecords(query string, args ...any) (pgx.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	rows, err := db.Conn.Query(ctx, query, args...)
 	if err != nil {
+		cancel()
 		fmt.Errorf("[Database Query Error] An error occurred while querying the DB : %v\n", err)
 		return rows, err
 	}
-	return rows, nil
+	return &rowsWithCancel{Rows: rows, cancel: cancel}, nil
 
 }
-
-
 
 func (db *DBInstance) ExecuteQuery(query string, args ...any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -1,10 +1,10 @@
 package models
 
 type Project struct {
-	ProjectId string `json:"project_id"`
-	UserId    string `json:"user_id"`
-	RepoUrl   string `json:"repo_url"`
-	Name      string `json:"name"`
+	ProjectId string  `json:"project_id,omitempty"`
+	UserId    *string `json:"user_id,omitempty"`
+	RepoUrl   *string `json:"repo_url,omitempty"`
+	Name      *string `json:"name,omitempty"`
 }
 
 type ProjectDetails struct {

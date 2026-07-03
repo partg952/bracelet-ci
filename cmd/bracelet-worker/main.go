@@ -5,13 +5,11 @@ import (
 	"log"
 	"os"
 
-	"bracelet-cicd/internal/bracelet-worker/db"
 	"bracelet-cicd/internal/bracelet-worker/worker"
 
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
-
 
 func init() {
 	godotenv.Load("../../.env")
@@ -19,7 +17,10 @@ func init() {
 
 func main() {
 	redisURL := os.Getenv("REDIS_URL")
-	dbInstance,_ := db.New(os.Getenv("DATABASE_URL"))
+	dbServiceURL := os.Getenv("DB_SERVICE_URL")
+	if dbServiceURL == "" {
+		dbServiceURL = "http://localhost:8081"
+	}
 	var redisOptions *redis.Options
 	var err error
 	if redisURL != "" {
@@ -30,6 +31,6 @@ func main() {
 	}
 	client := redis.NewClient(redisOptions)
 	log.Printf("Redis Client created\n")
-	worker := worker.New(client , dbInstance, "job_queue", 0)
+	worker := worker.New(client, dbServiceURL, "job_queue", 0)
 	worker.Start(context.Background())
 }

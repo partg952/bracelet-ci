@@ -21,7 +21,7 @@ func (pEditor *ProjectEditor) getByUserId() (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("[Project Query Error] invalid project data")
 	}
-	if project.UserId == "" {
+	if project.UserId == nil || *project.UserId == "" {
 		return nil, fmt.Errorf("[Project Query Error] user_id is required")
 	}
 
@@ -30,7 +30,7 @@ func (pEditor *ProjectEditor) getByUserId() (any, error) {
 		FROM projects
 		WHERE user_id = $1
 		ORDER BY created_at DESC`,
-		project.UserId,
+		*project.UserId,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("[Project Query Error] %w", err)
@@ -40,14 +40,20 @@ func (pEditor *ProjectEditor) getByUserId() (any, error) {
 	projects := make([]models.Project, 0)
 	for rows.Next() {
 		var result models.Project
+		var userId string
+		var repoUrl string
+		var name string
 		if err := rows.Scan(
 			&result.ProjectId,
-			&result.UserId,
-			&result.RepoUrl,
-			&result.Name,
+			&userId,
+			&repoUrl,
+			&name,
 		); err != nil {
 			return nil, fmt.Errorf("[Project Query Error] %w", err)
 		}
+		result.UserId = &userId
+		result.RepoUrl = &repoUrl
+		result.Name = &name
 		projects = append(projects, result)
 	}
 	if err := rows.Err(); err != nil {

@@ -29,16 +29,19 @@ func (pEditor *ProjectEditor) Create() (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("[Project Create Error] invalid project data")
 	}
-	if project.ProjectId == "" || project.UserId == "" || project.RepoUrl == "" || project.Name == "" {
+	if project.ProjectId == "" ||
+		project.UserId == nil || *project.UserId == "" ||
+		project.RepoUrl == nil || *project.RepoUrl == "" ||
+		project.Name == nil || *project.Name == "" {
 		return nil, fmt.Errorf("[Project Create Error] project_id, user_id, repo_url, and name are required")
 	}
 
 	if err := pEditor.dbConn.ExecuteQuery(
 		`INSERT INTO projects(id, user_id, repo_url, name) VALUES($1, $2, $3, $4)`,
 		project.ProjectId,
-		project.UserId,
-		project.RepoUrl,
-		project.Name,
+		*project.UserId,
+		*project.RepoUrl,
+		*project.Name,
 	); err != nil {
 		return nil, err
 	}
@@ -80,9 +83,9 @@ func (pEditor *ProjectEditor) Read() (any, error) {
 
 	return models.Project{
 		ProjectId: project.ProjectId,
-		UserId:    userId,
-		RepoUrl:   repoUrl,
-		Name:      name,
+		UserId:    &userId,
+		RepoUrl:   &repoUrl,
+		Name:      &name,
 	}, nil
 }
 
@@ -98,16 +101,16 @@ func (pEditor *ProjectEditor) Update() (any, error) {
 	setClauses := make([]string, 0, 3)
 	args := make([]any, 0, 4)
 
-	if project.UserId != "" {
-		args = append(args, project.UserId)
+	if project.UserId != nil {
+		args = append(args, *project.UserId)
 		setClauses = append(setClauses, fmt.Sprintf("user_id = $%d", len(args)))
 	}
-	if project.RepoUrl != "" {
-		args = append(args, project.RepoUrl)
+	if project.RepoUrl != nil {
+		args = append(args, *project.RepoUrl)
 		setClauses = append(setClauses, fmt.Sprintf("repo_url = $%d", len(args)))
 	}
-	if project.Name != "" {
-		args = append(args, project.Name)
+	if project.Name != nil {
+		args = append(args, *project.Name)
 		setClauses = append(setClauses, fmt.Sprintf("name = $%d", len(args)))
 	}
 

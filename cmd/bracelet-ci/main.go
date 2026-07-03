@@ -1,13 +1,14 @@
 package main
 
 import (
-	dbpkg "bracelet-cicd/internal/bracelet-ci/db"
-	"context"
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,15 +27,50 @@ type PushEvent struct {
 }
 
 type Job struct {
-	JobId      string `json:"job_id"`
-	RepoUrl    string `json:"repo_url"`
-	CommitSha  string `json:"commit_sha"`
-	CreatedAt  time.Time `json:"created_at"`
-	FinishedAt time.Time `json:"finished_at"`
+	JobId     string    `json:"job_id"`
+	RepoUrl   string    `json:"repo_url"`
+	CommitSha string    `json:"commit_sha"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
-func webhookHandler(dbInst *dbpkg.DBInstance, client *redis.Client) gin.HandlerFunc {
+type DBEvent struct {
+	Method     string `json:"method"`
+	EntityName string `json:"entity_name"`
+	EntityData any    `json:"entity_data"`
+}
 
+func sendDBEvent(ctx *gin.Context, dbServiceURL string, event DBEvent) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	request, err := http.NewRequestWithContext(
+		ctx.Request.Context(),
+		http.MethodPost,
+		strings.TrimRight(dbServiceURL, "/")+"/event",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("database service returned %s: %s", response.Status, strings.TrimSpace(string(body)))
+	}
+
+	return nil
+}
+
+func webhookHandler(dbServiceURL string, client *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		job_id := uuid.New()
 		body, err := io.ReadAll(c.Request.Body)
@@ -50,19 +86,21 @@ func webhookHandler(dbInst *dbpkg.DBInstance, client *redis.Client) gin.HandlerF
 			return
 		}
 		jobInstance := Job{
-			JobId:      job_id.String(),
-			RepoUrl:    event.Repository.CloneUrl,
-			CommitSha:  event.After,
-			CreatedAt:  time.Now(),
+			JobId:     job_id.String(),
+			RepoUrl:   event.Repository.CloneUrl,
+			CommitSha: event.After,
+			CreatedAt: time.Now(),
 		}
-		err = dbInst.ExecuteQuery(`INSERT INTO jobs(id, repo_url, commit_sha, created_at, finished_at) VALUES($1, $2, $3, $4, $5)`, jobInstance.JobId, jobInstance.RepoUrl, jobInstance.CommitSha, jobInstance.CreatedAt, jobInstance.FinishedAt)
-		if err != nil {
+		if err := sendDBEvent(c, dbServiceURL, DBEvent{
+			Method:     "create",
+			EntityName: "job",
+			EntityData: jobInstance,
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		ctx := context.Background()
-		if err := client.LPush(ctx, "job_queue", jobInstance.JobId).Err(); err != nil {
+		if err := client.LPush(c.Request.Context(), "job_queue", jobInstance.JobId).Err(); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -74,11 +112,10 @@ func init() {
 	godotenv.Load("../../.env")
 }
 func main() {
-	dbInst, err := dbpkg.New(os.Getenv("DATABASE_URL"))
-	if err != nil {
-		log.Fatalf("Database connection failed: %v", err)
+	dbServiceURL := os.Getenv("DB_SERVICE_URL")
+	if dbServiceURL == "" {
+		dbServiceURL = "http://localhost:8081"
 	}
-	defer dbInst.Conn.Close()
 
 	opts, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
@@ -89,10 +126,7 @@ func main() {
 
 	r := gin.Default()
 
-	r.POST("/webhook", webhookHandler(&dbInst, client))
+	r.POST("/webhook", webhookHandler(dbServiceURL, client))
 
 	r.Run()
 }
-
-
-

@@ -1,16 +1,19 @@
 package worker
 
 import (
-	"bracelet-cicd/internal/bracelet-worker/db"
 	dockerexecutors "bracelet-cicd/internal/bracelet-worker/docker-executors"
 	"bracelet-cicd/internal/bracelet-worker/repository"
 	"bracelet-cicd/internal/bracelet-worker/testrunner"
+	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -18,7 +21,8 @@ type Worker struct {
 	redisClient *redis.Client
 	queue       string
 	timeout     time.Duration
-	db          db.DBInstance
+	dbService   string
+	httpClient  *http.Client
 }
 type Status string
 
@@ -29,14 +33,23 @@ const (
 )
 
 type JobDetails struct {
-	JobId     string `db:"id"`
-	RepoUrl   string `db:"repo_url"`
-	CommitSHA string `db:"commit_sha"`
+	JobId     string `json:"job_id"`
+	RepoUrl   string `json:"repo_url"`
+	CommitSHA string `json:"commit_sha"`
 }
 
-func New(redisClient *redis.Client, dbInstance db.DBInstance, queue string, timeout time.Duration) *Worker {
+type dbEvent struct {
+	Method     string `json:"method"`
+	EntityName string `json:"entity_name"`
+	EntityData any    `json:"entity_data"`
+}
+
+func New(redisClient *redis.Client, dbService string, queue string, timeout time.Duration) *Worker {
 	if redisClient == nil {
 		log.Fatal("redis client is required")
+	}
+	if dbService == "" {
+		log.Fatal("database service URL is required")
 	}
 	if queue == "" {
 		log.Fatal("queue name is required")
@@ -46,8 +59,46 @@ func New(redisClient *redis.Client, dbInstance db.DBInstance, queue string, time
 		redisClient: redisClient,
 		queue:       queue,
 		timeout:     timeout,
-		db:          dbInstance,
+		dbService:   strings.TrimRight(dbService, "/"),
+		httpClient:  &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+func (w *Worker) sendDBEvent(ctx context.Context, event dbEvent, result any) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		w.dbService+"/event",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := w.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("database service returned %s: %s", response.Status, strings.TrimSpace(string(body)))
+	}
+	if result == nil || len(bytes.TrimSpace(body)) == 0 || string(bytes.TrimSpace(body)) == "null" {
+		return nil
+	}
+
+	return json.Unmarshal(body, result)
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -71,21 +122,15 @@ func (w *Worker) Start(ctx context.Context) {
 		job_id := values[1]
 		log.Printf("received queue message: %s", job_id)
 		fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		rows, err := w.db.FetchResults(fetchCtx, `SELECT id,repo_url,commit_sha FROM jobs WHERE id=$1`, job_id)
-		if err != nil {
-			cancel()
-			log.Printf("job %s: database query failed: %v", job_id, err)
-			continue
-		}
-
-		data, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[JobDetails])
+		var data JobDetails
+		err = w.sendDBEvent(fetchCtx, dbEvent{
+			Method:     "read",
+			EntityName: "job",
+			EntityData: map[string]any{"job_id": job_id},
+		}, &data)
 		cancel()
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				log.Printf("job %s: no database record found", job_id)
-			} else {
-				log.Printf("job %s: could not read query result: %v", job_id, err)
-			}
+			log.Printf("job %s: database service read failed: %v", job_id, err)
 			continue
 		}
 		pathname, err := repository.Clone(data.RepoUrl, data.CommitSHA)
@@ -95,10 +140,10 @@ func (w *Worker) Start(ctx context.Context) {
 		}
 
 		log.Printf("Successfully cloned the repo : %v", pathname)
-		dockerInst := dockerexecutors.New(job_id , pathname)
+		dockerInst := dockerexecutors.New(job_id, pathname)
 		err = dockerInst.BuildImage()
-		if err!=nil {
-			continue;
+		if err != nil {
+			continue
 		}
 
 		testResults, err := testrunner.Run(&dockerInst)
@@ -114,12 +159,20 @@ func (w *Worker) Start(ctx context.Context) {
 		}
 		log.Printf("Job Status : %v", status)
 
-		queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = w.db.ExecuteQuery(queryCtx, "UPDATE jobs SET status=$1 WHERE id=$2", status, job_id)
+		updateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err = w.sendDBEvent(updateCtx, dbEvent{
+			Method:     "update",
+			EntityName: "job",
+			EntityData: map[string]any{
+				"job_id": job_id,
+				"status": status,
+			},
+		}, nil)
+		cancel()
 		if err != nil {
-			log.Printf("job %s : update query failed : %v", err)
+			log.Printf("job %s: database service update failed: %v", job_id, err)
+			continue
 		}
-		log.Printf("Update Query successful")
+		log.Printf("job %s: status updated successfully", job_id)
 	}
-
 }

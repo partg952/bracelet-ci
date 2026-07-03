@@ -6,6 +6,8 @@ import (
 	"bracelet-cicd/internal/bracelet-DB-service/models"
 	"fmt"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type UserEditor struct {
@@ -29,8 +31,25 @@ func (uEditor *UserEditor) Create() (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("[User Create Error] invalid user data")
 	}
+	if user.Password == nil || *user.Password == "" {
+		return nil, fmt.Errorf("[User Create Error] password is required")
+	}
 
-	if err := uEditor.dbConn.ExecuteQuery("INSERT INTO user(id,username,email,password) VALUES($1 , $2 , $3 , $4)", user.UserId, user.Username, user.Email, user.Password); err != nil {
+	hashedPassword, err := bcrypt.GenerateFromPassword(
+		[]byte(*user.Password),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("[User Create Error] failed to hash password: %w", err)
+	}
+
+	if err := uEditor.dbConn.ExecuteQuery(
+		`INSERT INTO "user"(id, username, email, password) VALUES($1, $2, $3, $4)`,
+		user.UserId,
+		user.Username,
+		user.Email,
+		string(hashedPassword),
+	); err != nil {
 		return nil, err
 	}
 

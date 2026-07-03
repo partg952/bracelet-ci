@@ -6,6 +6,7 @@ import (
 	"bracelet-cicd/internal/bracelet-DB-service/models"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type JobEditor struct {
@@ -29,15 +30,21 @@ func (jEditor *JobEditor) Create() (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("[Job Create Error] invalid job data")
 	}
-	if job.JobId == "" || job.ProjectId == "" || job.CommitSHA == "" {
-		return nil, fmt.Errorf("[Job Create Error] job_id, project_id, and commit_sha are required")
+	if job.JobId == "" ||
+		job.RepoUrl == nil || *job.RepoUrl == "" ||
+		job.CommitSHA == nil || *job.CommitSHA == "" ||
+		job.CreatedAt == nil {
+		return nil, fmt.Errorf("[Job Create Error] job_id, repo_url, commit_sha, and created_at are required")
 	}
 
 	if err := jEditor.dbConn.ExecuteQuery(
-		`INSERT INTO "job"(id, project_id, commit_sha, finished_at) VALUES($1, $2, $3, $4)`,
+		`INSERT INTO jobs(id, project_id, repo_url, commit_sha, created_at, finished_at)
+		VALUES($1, $2, $3, $4, $5, $6)`,
 		job.JobId,
 		job.ProjectId,
-		job.CommitSHA,
+		*job.RepoUrl,
+		*job.CommitSHA,
+		*job.CreatedAt,
 		job.FinishedAt,
 	); err != nil {
 		return nil, err
@@ -56,7 +63,9 @@ func (jEditor *JobEditor) Read() (any, error) {
 	}
 
 	rows, err := jEditor.dbConn.FetchRecords(
-		`SELECT project_id, commit_sha, finished_at FROM "job" WHERE id = $1`,
+		`SELECT project_id, repo_url, commit_sha, finished_at, status
+		FROM jobs
+		WHERE id = $1`,
 		job.JobId,
 	)
 	if err != nil {
@@ -71,18 +80,22 @@ func (jEditor *JobEditor) Read() (any, error) {
 		return nil, fmt.Errorf("[Job Read Error] job not found")
 	}
 
-	var projectId string
+	var projectId *string
+	var repoUrl *string
 	var commitSha string
-	var finishedAt *string
-	if err := rows.Scan(&projectId, &commitSha, &finishedAt); err != nil {
+	var finishedAt *time.Time
+	var status *string
+	if err := rows.Scan(&projectId, &repoUrl, &commitSha, &finishedAt, &status); err != nil {
 		return nil, fmt.Errorf("[Job Read Error] %w", err)
 	}
 
 	return models.Job{
 		JobId:      job.JobId,
 		ProjectId:  projectId,
-		CommitSHA:  commitSha,
+		RepoUrl:    repoUrl,
+		CommitSHA:  &commitSha,
 		FinishedAt: finishedAt,
+		Status:     status,
 	}, nil
 }
 
@@ -95,20 +108,24 @@ func (jEditor *JobEditor) Update() (any, error) {
 		return nil, fmt.Errorf("[Job Update Error] job_id is required")
 	}
 
-	setClauses := make([]string, 0, 3)
-	args := make([]any, 0, 4)
+	setClauses := make([]string, 0, 4)
+	args := make([]any, 0, 5)
 
-	if job.ProjectId != "" {
-		args = append(args, job.ProjectId)
+	if job.ProjectId != nil {
+		args = append(args, *job.ProjectId)
 		setClauses = append(setClauses, fmt.Sprintf("project_id = $%d", len(args)))
 	}
-	if job.CommitSHA != "" {
-		args = append(args, job.CommitSHA)
+	if job.CommitSHA != nil {
+		args = append(args, *job.CommitSHA)
 		setClauses = append(setClauses, fmt.Sprintf("commit_sha = $%d", len(args)))
 	}
 	if job.FinishedAt != nil {
 		args = append(args, *job.FinishedAt)
 		setClauses = append(setClauses, fmt.Sprintf("finished_at = $%d", len(args)))
+	}
+	if job.Status != nil {
+		args = append(args, *job.Status)
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", len(args)))
 	}
 
 	if len(setClauses) == 0 {
@@ -117,7 +134,7 @@ func (jEditor *JobEditor) Update() (any, error) {
 
 	args = append(args, job.JobId)
 	query := fmt.Sprintf(
-		`UPDATE "job" SET %s WHERE id = $%d`,
+		`UPDATE jobs SET %s WHERE id = $%d`,
 		strings.Join(setClauses, ", "),
 		len(args),
 	)
@@ -138,7 +155,7 @@ func (jEditor *JobEditor) Delete() (any, error) {
 		return nil, fmt.Errorf("[Job Delete Error] job_id is required")
 	}
 
-	if err := jEditor.dbConn.ExecuteQuery(`DELETE FROM "job" WHERE id = $1`, job.JobId); err != nil {
+	if err := jEditor.dbConn.ExecuteQuery(`DELETE FROM jobs WHERE id = $1`, job.JobId); err != nil {
 		return nil, err
 	}
 

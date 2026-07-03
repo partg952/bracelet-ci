@@ -14,3 +14,7 @@ type UserDetails struct {
 	ProjectCount int64  `json:"project_count"`
 	JobCount     int64  `json:"job_count"`
 }
+
+type UserExists struct {
+	Exists bool `json:"exists"`
+}

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -34,8 +33,6 @@ func parseEvent[T EntityData](payload RawEvent) (dbactions.Event, error) {
 	if err := json.Unmarshal(payload.EntityData, &entityData); err != nil {
 		return dbactions.Event{}, err
 	}
-
-	log.Printf("Entity Data: %v", entityData)
 
 	return dbactions.Event{
 		Method:     payload.Method,
