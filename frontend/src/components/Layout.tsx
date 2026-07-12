@@ -10,6 +10,7 @@ import {
   Container,
 } from '@mui/material'
 import { useAuth } from '../context/AuthContext'
+import logo from '../assets/logo_without_title.png'
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth()
@@ -24,46 +25,25 @@ export default function Layout({ children }: { children: ReactNode }) {
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
       <AppBar position="sticky">
         <Toolbar>
-          <Box
-            component={Link}
-            to="/projects"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1.5,
-              textDecoration: 'none',
-              mr: 'auto',
-            }}
-          >
-            {/* Wordmark */}
             <Box
+              component={Link}
+              to="/projects"
               sx={{
-                width: 20,
-                height: 20,
-                bgcolor: '#e2e8f0',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
+                textDecoration: 'none',
+                mr: 'auto',
+                '&:hover': { opacity: 0.85 },
+                transition: 'opacity 0.15s',
               }}
             >
               <Box
-                component="span"
-                sx={{
-                  display: 'block',
-                  width: 8,
-                  height: 8,
-                  bgcolor: '#0c0e12',
-                }}
+                component="img"
+                src={logo}
+                alt="BraceletCI"
+                sx={{ height: 28, width: 'auto', display: 'block' }}
               />
             </Box>
-            <Typography
-              variant="body2"
-              sx={{ color: '#e2e8f0', fontWeight: 500, letterSpacing: '0.02em' }}
-            >
-              braceletci
-            </Typography>
-          </Box>
 
           {user && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>

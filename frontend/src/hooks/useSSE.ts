@@ -24,7 +24,7 @@ export function useSSE(projectId: string | null, onEvent: SSEHandler) {
     esRef.current = es
 
     es.addEventListener('database-event', (e: MessageEvent) => {
-      retryDelay.current = 1000 // reset back-off on success
+      retryDelay.current = 1000
       try {
         const data = JSON.parse(e.data) as SSEDatabaseEvent
         handlerRef.current(data)
@@ -36,7 +36,6 @@ export function useSSE(projectId: string | null, onEvent: SSEHandler) {
     es.onerror = () => {
       es.close()
       esRef.current = null
-      // exponential back-off capped at 30 s
       timerRef.current = setTimeout(() => {
         retryDelay.current = Math.min(retryDelay.current * 2, 30_000)
         connect()

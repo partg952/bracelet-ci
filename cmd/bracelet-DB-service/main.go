@@ -51,7 +51,6 @@ func projectIdForJobEvent(database *dbpkg.DBInstance, job models.Job) string {
 	if projectId == nil {
 		return ""
 	}
-
 	return *projectId
 }
 
@@ -61,8 +60,10 @@ func main() {
 		log.Fatalf("Database connection failed: %v", err)
 	}
 	defer dbInstance.Conn.Close()
+
 	broker := util.NewHub()
 	r := gin.Default()
+
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:4173"},
 		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
@@ -70,10 +71,12 @@ func main() {
 		ExposeHeaders:    []string{"Content-Type"},
 		AllowCredentials: false,
 	}))
+
 	r.GET("/stream", func(c *gin.Context) {
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
 		c.Writer.Header().Set("Cache-Control", "no-cache")
 		c.Writer.Header().Set("Connection", "keep-alive")
+
 		projectId := c.Query("project_id")
 		if projectId == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
@@ -93,23 +96,24 @@ func main() {
 			}
 		})
 	})
+
 	r.POST("/event", func(ctx *gin.Context) {
 		body, err := io.ReadAll(ctx.Request.Body)
 		if err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
 			return
 		}
+
 		var rawEventInstance parser.RawEvent
-		err = json.Unmarshal(body, &rawEventInstance)
-		if err != nil {
-			log.Printf("Error occurred while unmarshalling for raw event : %v", err)
+		if err := json.Unmarshal(body, &rawEventInstance); err != nil {
+			log.Printf("Error unmarshalling raw event: %v", err)
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 			return
 		}
 
 		parsedEvent, err := parser.ParseEvent(rawEventInstance)
 		if err != nil {
-			log.Printf("[Event Parsing error] An error occurred while parsing the event : %v", err)
+			log.Printf("[Event Parsing error] %v", err)
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
 			return
 		}
@@ -121,9 +125,6 @@ func main() {
 				ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid job event data"})
 				return
 			}
-			// For create events the job doesn't exist in the DB yet, so read
-			// project_id directly from the payload. For update/delete fall back
-			// to a DB lookup (job may only carry job_id).
 			if parsedEvent.Method == "create" && job.ProjectId != nil && *job.ProjectId != "" {
 				projectId = *job.ProjectId
 			} else {
@@ -150,5 +151,6 @@ func main() {
 
 		ctx.JSON(http.StatusOK, result)
 	})
+
 	r.Run(":8081")
 }

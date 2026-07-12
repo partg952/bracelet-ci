@@ -23,7 +23,6 @@ async function event<T>(payload: RawEvent): Promise<T> {
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
   }
 
-  // Some endpoints return null (e.g. create/delete) — handle gracefully
   const text = await res.text()
   return text ? (JSON.parse(text) as T) : (null as unknown as T)
 }

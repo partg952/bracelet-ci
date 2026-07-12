@@ -14,6 +14,7 @@ import { Visibility, VisibilityOff } from '@mui/icons-material'
 import { v4 as uuidv4 } from 'uuid'
 import { useAuth } from '../context/AuthContext'
 import { register, signIn, checkEmailExists } from '../lib/api'
+import logo from '../assets/logo_without_title.png'
 
 export default function RegisterPage() {
   const { login } = useAuth()
@@ -67,17 +68,12 @@ export default function RegisterPage() {
       }}
     >
       <Box sx={{ width: '100%', maxWidth: 360 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 5 }}>
-          <Box sx={{ width: 20, height: 20, bgcolor: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Box component="span" sx={{ display: 'block', width: 8, height: 8, bgcolor: '#0c0e12' }} />
-          </Box>
-          <Typography variant="body2" sx={{ color: '#e2e8f0', fontWeight: 500, letterSpacing: '0.02em' }}>
-            braceletci
-          </Typography>
+        <Box sx={{ mb: 4 }}>
+          <Box component="img" src={logo} alt="BraceletCI" sx={{ height: 56, width: 'auto' }} />
         </Box>
 
         <Typography variant="h5" sx={{ color: '#e2e8f0', mb: 0.5 }}>
-          Create account
+          Welcome to BraceletCI
         </Typography>
         <Typography variant="body2" sx={{ color: '#475569', mb: 4 }}>
           Sign up to start running CI pipelines

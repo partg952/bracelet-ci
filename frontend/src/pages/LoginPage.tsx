@@ -13,6 +13,7 @@ import {
 import { Visibility, VisibilityOff } from '@mui/icons-material'
 import { useAuth } from '../context/AuthContext'
 import { signIn } from '../lib/api'
+import logo from '../assets/logo_without_title.png'
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -51,18 +52,13 @@ export default function LoginPage() {
       }}
     >
       <Box sx={{ width: '100%', maxWidth: 360 }}>
-        {/* Wordmark */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 5 }}>
-          <Box sx={{ width: 20, height: 20, bgcolor: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Box component="span" sx={{ display: 'block', width: 8, height: 8, bgcolor: '#0c0e12' }} />
-          </Box>
-          <Typography variant="body2" sx={{ color: '#e2e8f0', fontWeight: 500, letterSpacing: '0.02em' }}>
-            braceletci
-          </Typography>
+        {/* Logo */}
+        <Box sx={{ mb: 4 }}>
+          <Box component="img" src={logo} alt="BraceletCI" sx={{ height: 56, width: 'auto' }} />
         </Box>
 
         <Typography variant="h5" sx={{ color: '#e2e8f0', mb: 0.5 }}>
-          Sign in
+          Welcome back to BraceletCI
         </Typography>
         <Typography variant="body2" sx={{ color: '#475569', mb: 4 }}>
           Enter your credentials to continue

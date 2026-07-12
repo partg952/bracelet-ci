@@ -38,6 +38,7 @@ func (d *DockerInstance) BuildImage() error {
 
 func (d *DockerInstance) RunCommandOnImage(command string) (ExecutionResult, error) {
 	cmd := exec.Command("docker", "run", "--rm", d.imageName, "sh", "-c", command)
+	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		var exitErr *exec.ExitError
