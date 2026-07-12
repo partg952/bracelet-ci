@@ -12,12 +12,47 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
 func init() {
 	_ = godotenv.Load("../../.env")
+}
+
+func projectIdForJobEvent(database *dbpkg.DBInstance, job models.Job) string {
+	if job.ProjectId != nil && *job.ProjectId != "" {
+		return *job.ProjectId
+	}
+	if job.JobId == "" {
+		return ""
+	}
+
+	rows, err := database.FetchRecords(`SELECT project_id FROM jobs WHERE id = $1`, job.JobId)
+	if err != nil {
+		log.Printf("[SSE Publish error] failed to fetch project_id for job %s: %v", job.JobId, err)
+		return ""
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			log.Printf("[SSE Publish error] failed to read project_id for job %s: %v", job.JobId, err)
+		}
+		return ""
+	}
+
+	var projectId *string
+	if err := rows.Scan(&projectId); err != nil {
+		log.Printf("[SSE Publish error] failed to scan project_id for job %s: %v", job.JobId, err)
+		return ""
+	}
+	if projectId == nil {
+		return ""
+	}
+
+	return *projectId
 }
 
 func main() {
@@ -28,17 +63,24 @@ func main() {
 	defer dbInstance.Conn.Close()
 	broker := util.NewHub()
 	r := gin.Default()
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:4173"},
+		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type"},
+		ExposeHeaders:    []string{"Content-Type"},
+		AllowCredentials: false,
+	}))
 	r.GET("/stream", func(c *gin.Context) {
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
 		c.Writer.Header().Set("Cache-Control", "no-cache")
 		c.Writer.Header().Set("Connection", "keep-alive")
-		jobId := c.Query("job_id")
-		if jobId == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "job_id is required"})
+		projectId := c.Query("project_id")
+		if projectId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
 			return
 		}
 
-		channel, unsubscribe := broker.Subscribe(jobId)
+		channel, unsubscribe := broker.Subscribe(projectId)
 		defer unsubscribe()
 
 		c.Stream(func(w io.Writer) bool {
@@ -72,14 +114,38 @@ func main() {
 			return
 		}
 
+		projectId := ""
+		if parsedEvent.EntityName == "job" {
+			job, ok := parsedEvent.EntityData.(models.Job)
+			if !ok {
+				ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid job event data"})
+				return
+			}
+			// For create events the job doesn't exist in the DB yet, so read
+			// project_id directly from the payload. For update/delete fall back
+			// to a DB lookup (job may only carry job_id).
+			if parsedEvent.Method == "create" && job.ProjectId != nil && *job.ProjectId != "" {
+				projectId = *job.ProjectId
+			} else {
+				projectId = projectIdForJobEvent(&dbInstance, job)
+			}
+		}
+
 		result, err := parsedEvent.Execute(&dbInstance)
 		if err != nil {
 			log.Printf("[Event Execution error] %v", err)
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
 			return
 		}
-		if parsedEvent.EntityName == "job" {
-			broker.Publish(parsedEvent.EntityData.(models.Job).JobId, result)
+
+		if projectId != "" {
+			broker.Publish(projectId, gin.H{
+				"method":      parsedEvent.Method,
+				"entity_name": parsedEvent.EntityName,
+				"operation":   parsedEvent.Operation,
+				"entity_data": parsedEvent.EntityData,
+				"result":      result,
+			})
 		}
 
 		ctx.JSON(http.StatusOK, result)

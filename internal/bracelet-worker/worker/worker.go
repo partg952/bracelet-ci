@@ -37,7 +37,6 @@ type JobDetails struct {
 	RepoUrl   string `json:"repo_url"`
 	CommitSHA string `json:"commit_sha"`
 }
-
 type dbEvent struct {
 	Method     string `json:"method"`
 	EntityName string `json:"entity_name"`
@@ -121,6 +120,19 @@ func (w *Worker) Start(ctx context.Context) {
 
 		job_id := values[1]
 		log.Printf("received queue message: %s", job_id)
+
+		// Mark job as running immediately so the dashboard reflects it
+		runningCtx, cancelRunning := context.WithTimeout(ctx, 5*time.Second)
+		_ = w.sendDBEvent(runningCtx, dbEvent{
+			Method:     "update",
+			EntityName: "job",
+			EntityData: map[string]any{
+				"job_id": job_id,
+				"status": Running,
+			},
+		}, nil)
+		cancelRunning()
+
 		fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		var data JobDetails
 		err = w.sendDBEvent(fetchCtx, dbEvent{
@@ -164,8 +176,9 @@ func (w *Worker) Start(ctx context.Context) {
 			Method:     "update",
 			EntityName: "job",
 			EntityData: map[string]any{
-				"job_id": job_id,
-				"status": status,
+				"job_id":      job_id,
+				"status":      status,
+				"finished_at": time.Now().UTC(),
 			},
 		}, nil)
 		cancel()

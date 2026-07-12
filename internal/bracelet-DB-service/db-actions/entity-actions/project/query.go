@@ -11,6 +11,8 @@ func (pEditor *ProjectEditor) Query(operation string) (any, error) {
 		return pEditor.getDetails()
 	case "get_by_user_id":
 		return pEditor.getByUserId()
+	case "get_by_repo_url":
+		return pEditor.getByRepoUrl()
 	default:
 		return nil, fmt.Errorf("[Project Query Error] unsupported operation %q", operation)
 	}
@@ -114,4 +116,37 @@ func (pEditor *ProjectEditor) getDetails() (any, error) {
 	}
 
 	return details, nil
+}
+
+func (pEditor *ProjectEditor) getByRepoUrl() (any, error) {
+	project, ok := pEditor.event.EntityData.(models.Project)
+	if !ok {
+		return nil, fmt.Errorf("[Project Query Error] invalid project data")
+	}
+	if project.RepoUrl == nil || *project.RepoUrl == "" {
+		return nil, fmt.Errorf("[Project Query Error] repo_url is required")
+	}
+
+	rows, err := pEditor.dbConn.FetchRecords(
+		`SELECT id FROM projects WHERE repo_url = $1 LIMIT 1`,
+		*project.RepoUrl,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("[Project Query Error] %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if rows.Err() != nil {
+			return nil, fmt.Errorf("[Project Query Error] %w", rows.Err())
+		}
+		return nil, fmt.Errorf("[Project Query Error] no project found for repo_url %q", *project.RepoUrl)
+	}
+
+	var result models.Project
+	if err := rows.Scan(&result.ProjectId); err != nil {
+		return nil, fmt.Errorf("[Project Query Error] %w", err)
+	}
+
+	return result, nil
 }
