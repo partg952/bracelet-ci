@@ -1,15 +1,15 @@
 package logs
 
-import "time"
+// import "time"
 
-type Stream struct {
-	buffer []string
-}
+// type Stream struct {
+// 	buffer []string
+// }
 
-type Log struct {
-	timestamp time.Time
+// type Log struct {
+// 	timestamp time.Time
 
-}
-func NewStream() Stream {
+// }
+// func NewStream() Stream {
 
-}
+// }

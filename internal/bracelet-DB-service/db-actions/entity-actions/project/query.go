@@ -135,14 +135,14 @@ func (pEditor *ProjectEditor) getByRepoUrl() (any, error) {
 		return nil, fmt.Errorf("[Project Query Error] %w", err)
 	}
 	defer rows.Close()
-
+	
 	if !rows.Next() {
 		if rows.Err() != nil {
 			return nil, fmt.Errorf("[Project Query Error] %w", rows.Err())
 		}
 		return nil, fmt.Errorf("[Project Query Error] no project found for repo_url %q", *project.RepoUrl)
 	}
-
+	
 	var result models.Project
 	if err := rows.Scan(&result.ProjectId); err != nil {
 		return nil, fmt.Errorf("[Project Query Error] %w", err)

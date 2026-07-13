@@ -2,6 +2,7 @@ package worker
 
 import (
 	dockerexecutors "bracelet-cicd/internal/bracelet-worker/docker-executors"
+	"bracelet-cicd/internal/bracelet-worker/parser"
 	"bracelet-cicd/internal/bracelet-worker/repository"
 	"bracelet-cicd/internal/bracelet-worker/testrunner"
 	"bytes"
@@ -152,13 +153,14 @@ func (w *Worker) Start(ctx context.Context) {
 		}
 
 		log.Printf("Successfully cloned the repo : %v", pathname)
-		dockerInst := dockerexecutors.New(job_id, pathname)
-		err = dockerInst.BuildImage()
+		parsedYaml, err := parser.ParseYaml(pathname)
 		if err != nil {
+			log.Printf("job %s: yaml parse failed: %v", job_id, err)
 			continue
 		}
 
-		testResults, err := testrunner.Run(&dockerInst)
+		dockerInst := dockerexecutors.New(job_id, pathname)
+		testResults, err := testrunner.Run(&dockerInst, parsedYaml)
 		if err != nil {
 			log.Printf("job %s: test runner failed: %v", job_id, err)
 			continue
