@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -41,8 +42,28 @@ type DBEvent struct {
 	EntityData any    `json:"entity_data"`
 }
 
-// queryProjectIdByRepoUrl asks the DB service for the project ID that owns the
-// given repository URL. Returns an empty string if none is found.
+func parsePushEvent(body []byte, contentType string) (PushEvent, error) {
+	if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			return PushEvent{}, fmt.Errorf("failed to parse form payload: %w", err)
+		}
+
+		payload := values.Get("payload")
+		if payload == "" {
+			return PushEvent{}, fmt.Errorf("form payload is missing")
+		}
+		body = []byte(payload)
+	}
+
+	var event PushEvent
+	if err := json.Unmarshal(body, &event); err != nil {
+		return PushEvent{}, fmt.Errorf("failed to unmarshal push event: %w", err)
+	}
+
+	return event, nil
+}
+
 func queryProjectIdByRepoUrl(ctx *gin.Context, dbServiceURL string, repoUrl string) (string, error) {
 	event := DBEvent{
 		Method:     "query",
@@ -123,6 +144,11 @@ func sendDBEvent(ctx *gin.Context, dbServiceURL string, event DBEvent) error {
 
 func webhookHandler(dbServiceURL string, client *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if githubEvent := c.GetHeader("X-GitHub-Event"); githubEvent != "" && githubEvent != "push" {
+			c.JSON(http.StatusOK, gin.H{"status": "ignored", "event": githubEvent})
+			return
+		}
+
 		job_id := uuid.New()
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
@@ -130,10 +156,14 @@ func webhookHandler(dbServiceURL string, client *redis.Client) gin.HandlerFunc {
 			return
 		}
 
-		var event PushEvent
-		err = json.Unmarshal(body, &event)
+		event, err := parsePushEvent(body, c.GetHeader("Content-Type"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "JSON unmarshalling failed"})
+			log.Println(err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if event.Repository.CloneUrl == "" || event.After == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "push event is missing repository.clone_url or after"})
 			return
 		}
 		jobInstance := Job{

@@ -3,6 +3,7 @@ package projectactions
 import (
 	"bracelet-cicd/internal/bracelet-DB-service/models"
 	"fmt"
+	"strings"
 )
 
 func (pEditor *ProjectEditor) Query(operation string) (any, error) {
@@ -126,23 +127,23 @@ func (pEditor *ProjectEditor) getByRepoUrl() (any, error) {
 	if project.RepoUrl == nil || *project.RepoUrl == "" {
 		return nil, fmt.Errorf("[Project Query Error] repo_url is required")
 	}
-
+	repoUrl := strings.TrimSuffix(*project.RepoUrl, ".git")
 	rows, err := pEditor.dbConn.FetchRecords(
 		`SELECT id FROM projects WHERE repo_url = $1 LIMIT 1`,
-		*project.RepoUrl,
+		repoUrl,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("[Project Query Error] %w", err)
 	}
 	defer rows.Close()
-	
+
 	if !rows.Next() {
 		if rows.Err() != nil {
 			return nil, fmt.Errorf("[Project Query Error] %w", rows.Err())
 		}
 		return nil, fmt.Errorf("[Project Query Error] no project found for repo_url %q", *project.RepoUrl)
 	}
-	
+
 	var result models.Project
 	if err := rows.Scan(&result.ProjectId); err != nil {
 		return nil, fmt.Errorf("[Project Query Error] %w", err)
