@@ -64,7 +64,7 @@ func parsePushEvent(body []byte, contentType string) (PushEvent, error) {
 	return event, nil
 }
 
-func queryProjectIdByRepoUrl(ctx *gin.Context, dbServiceURL string, repoUrl string) (string, error) {
+func QueryProjectIdByRepoUrl(ctx *gin.Context, dbServiceURL string, repoUrl string) (string, error) {
 	event := DBEvent{
 		Method:     "query",
 		EntityName: "project",
@@ -111,7 +111,7 @@ func queryProjectIdByRepoUrl(ctx *gin.Context, dbServiceURL string, repoUrl stri
 	return project.ProjectId, nil
 }
 
-func sendDBEvent(ctx *gin.Context, dbServiceURL string, event DBEvent) error {
+func SendDBEvent(ctx *gin.Context, dbServiceURL string, event DBEvent) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -174,14 +174,14 @@ func webhookHandler(dbServiceURL string, client *redis.Client) gin.HandlerFunc {
 		}
 
 		// Look up the project that owns this repository so the job is linked.
-		projectId, err := queryProjectIdByRepoUrl(c, dbServiceURL, event.Repository.CloneUrl)
+		projectId, err := QueryProjectIdByRepoUrl(c, dbServiceURL, event.Repository.CloneUrl)
 		if err != nil {
 			log.Printf("[webhook] could not resolve project for repo %s: %v", event.Repository.CloneUrl, err)
 			// Non-fatal: continue without a project_id rather than dropping the job.
 		} else {
 			jobInstance.ProjectId = projectId
 		}
-		if err := sendDBEvent(c, dbServiceURL, DBEvent{
+		if err := SendDBEvent(c, dbServiceURL, DBEvent{
 			Method:     "create",
 			EntityName: "job",
 			EntityData: jobInstance,

@@ -38,7 +38,7 @@ type JobDetails struct {
 	RepoUrl   string `json:"repo_url"`
 	CommitSHA string `json:"commit_sha"`
 }
-type dbEvent struct {
+type DBEvent struct {
 	Method     string `json:"method"`
 	EntityName string `json:"entity_name"`
 	EntityData any    `json:"entity_data"`
@@ -64,7 +64,7 @@ func New(redisClient *redis.Client, dbService string, queue string, timeout time
 	}
 }
 
-func (w *Worker) sendDBEvent(ctx context.Context, event dbEvent, result any) error {
+func (w *Worker) SendDBEvent(ctx context.Context, event DBEvent, result any) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -102,6 +102,9 @@ func (w *Worker) sendDBEvent(ctx context.Context, event dbEvent, result any) err
 }
 
 func (w *Worker) Start(ctx context.Context) {
+	go func() {
+
+	}()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -122,9 +125,8 @@ func (w *Worker) Start(ctx context.Context) {
 		job_id := values[1]
 		log.Printf("received queue message: %s", job_id)
 
-		// Mark job as running immediately so the dashboard reflects it
 		runningCtx, cancelRunning := context.WithTimeout(ctx, 5*time.Second)
-		_ = w.sendDBEvent(runningCtx, dbEvent{
+		_ = w.SendDBEvent(runningCtx, DBEvent{
 			Method:     "update",
 			EntityName: "job",
 			EntityData: map[string]any{
@@ -136,7 +138,7 @@ func (w *Worker) Start(ctx context.Context) {
 
 		fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		var data JobDetails
-		err = w.sendDBEvent(fetchCtx, dbEvent{
+		err = w.SendDBEvent(fetchCtx, DBEvent{
 			Method:     "read",
 			EntityName: "job",
 			EntityData: map[string]any{"job_id": job_id},
@@ -174,7 +176,7 @@ func (w *Worker) Start(ctx context.Context) {
 		log.Printf("Job Status : %v", status)
 
 		updateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = w.sendDBEvent(updateCtx, dbEvent{
+		err = w.SendDBEvent(updateCtx, DBEvent{
 			Method:     "update",
 			EntityName: "job",
 			EntityData: map[string]any{

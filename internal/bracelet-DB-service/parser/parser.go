@@ -10,7 +10,7 @@ import (
 )
 
 type EntityData interface {
-	models.Job | models.Project | models.User
+	models.Job | models.JobLog | models.Project | models.User
 }
 
 type RawEvent struct {
@@ -24,6 +24,7 @@ type Parser func(RawEvent) (dbactions.Event, error)
 
 var registry = map[string]Parser{
 	"job":     parseEvent[models.Job],
+	"job_log": parseEvent[models.JobLog],
 	"project": parseEvent[models.Project],
 	"user":    parseEvent[models.User],
 }
