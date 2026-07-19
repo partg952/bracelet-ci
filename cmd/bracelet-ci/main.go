@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,27 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
+
+const heartbeatPrefix = "heartbeat:"
+
+func watchExpiredHeartbeats(ctx context.Context, client *redis.Client, queue string) {
+	pubsub := client.PSubscribe(ctx, "__keyevent@*__:expired")
+	defer pubsub.Close()
+
+	log.Printf("[heartbeat] watching for expired job heartbeats")
+
+	for msg := range pubsub.Channel() {
+		key := msg.Payload
+		if !strings.HasPrefix(key, heartbeatPrefix) {
+			continue
+		}
+		jobId := strings.TrimPrefix(key, heartbeatPrefix)
+		log.Printf("[heartbeat] job %s expired — re-queuing", jobId)
+		if err := client.LPush(ctx, queue, jobId).Err(); err != nil {
+			log.Printf("[heartbeat] failed to re-queue %s: %v", jobId, err)
+		}
+	}
+}
 
 type RepoInfo struct {
 	CloneUrl string `json:"clone_url"`
@@ -213,6 +235,8 @@ func main() {
 	}
 	client := redis.NewClient(opts)
 	defer client.Close()
+
+	go watchExpiredHeartbeats(context.Background(), client, "job_queue")
 
 	r := gin.Default()
 

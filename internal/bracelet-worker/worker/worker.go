@@ -14,10 +14,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	heartbeatTTL      = 90 * time.Second
+	heartbeatInterval = 30 * time.Second
+	heartbeatPrefix   = "heartbeat:"
+)
+
 type Worker struct {
+	id          string
 	redisClient *redis.Client
 	queue       string
 	timeout     time.Duration
@@ -51,6 +59,7 @@ func New(redisClient *redis.Client, dbService string, queue string, timeout time
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	return &Worker{
+		id:          uuid.NewString(),
 		redisClient: redisClient,
 		queue:       queue,
 		timeout:     timeout,
@@ -61,6 +70,36 @@ func New(redisClient *redis.Client, dbService string, queue string, timeout time
 func (w *Worker) SendDBEvent(ctx context.Context, event dbclient.DBEvent, result any) error {
 	return w.db.Send(ctx, event, result)
 }
+
+func heartbeatKey(jobId string) string {
+	return heartbeatPrefix + jobId
+}
+
+func (w *Worker) startHeartbeat(ctx context.Context, jobId string) context.CancelFunc {
+	hbCtx, cancel := context.WithCancel(ctx)
+
+	set := func() {
+		w.redisClient.Set(hbCtx, heartbeatKey(jobId), w.id, heartbeatTTL)
+	}
+	set()
+
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				w.redisClient.Del(context.Background(), heartbeatKey(jobId))
+				return
+			case <-ticker.C:
+				set()
+			}
+		}
+	}()
+
+	return cancel
+}
+
 
 func (w *Worker) Start(ctx context.Context) {
 	for {
@@ -80,18 +119,21 @@ func (w *Worker) Start(ctx context.Context) {
 			continue
 		}
 
-		job_id := values[1]
-		log.Printf("received queue message: %s", job_id)
+		jobId := values[1]
+		log.Printf("received queue message: %s", jobId)
+
+		// Start heartbeat — cancel deletes the key when job finishes
+		stopHeartbeat := w.startHeartbeat(ctx, jobId)
 
 		jobCtx, cancelJob := context.WithCancel(ctx)
-		jobLog := worklogs.New(job_id, w.db)
+		jobLog := worklogs.New(jobId, w.db)
 		jobLog.StartFlusher(jobCtx)
 
 		runningCtx, cancelRunning := context.WithTimeout(ctx, 5*time.Second)
 		_ = w.db.Send(runningCtx, dbclient.DBEvent{
 			Method:     "update",
 			EntityName: "job",
-			EntityData: map[string]any{"job_id": job_id, "status": Running},
+			EntityData: map[string]any{"job_id": jobId, "status": Running},
 		}, nil)
 		cancelRunning()
 
@@ -100,12 +142,13 @@ func (w *Worker) Start(ctx context.Context) {
 		err = w.db.Send(fetchCtx, dbclient.DBEvent{
 			Method:     "read",
 			EntityName: "job",
-			EntityData: map[string]any{"job_id": job_id},
+			EntityData: map[string]any{"job_id": jobId},
 		}, &data)
 		cancelFetch()
 		if err != nil {
-			log.Printf("job %s: database service read failed: %v", job_id, err)
+			log.Printf("job %s: database service read failed: %v", jobId, err)
 			cancelJob()
+			stopHeartbeat()
 			continue
 		}
 
@@ -118,9 +161,10 @@ func (w *Worker) Start(ctx context.Context) {
 			}
 		}
 		if err != nil {
-			log.Printf("job %s: repository clone failed: %v", job_id, err)
+			log.Printf("job %s: repository clone failed: %v", jobId, err)
 			jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("clone failed: %v", err)})
 			cancelJob()
+			stopHeartbeat()
 			continue
 		}
 		log.Printf("successfully cloned the repo: %v", pathname)
@@ -128,15 +172,16 @@ func (w *Worker) Start(ctx context.Context) {
 		// Parse YAML
 		parsedYaml, err := parser.ParseYaml(pathname)
 		if err != nil {
-			log.Printf("job %s: yaml parse failed: %v", job_id, err)
+			log.Printf("job %s: yaml parse failed: %v", jobId, err)
 			jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("yaml parse failed: %v", err)})
 			cancelJob()
+			stopHeartbeat()
 			continue
 		}
 
 		// Run tests
 		jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: "starting test runner"})
-		dockerInst := dockerexecutors.New(job_id, pathname)
+		dockerInst := dockerexecutors.New(jobId, pathname)
 		testResults, err := testrunner.Run(&dockerInst, parsedYaml)
 		for _, line := range strings.Split(strings.TrimSpace(testResults.Output), "\n") {
 			if strings.TrimSpace(line) != "" {
@@ -144,9 +189,10 @@ func (w *Worker) Start(ctx context.Context) {
 			}
 		}
 		if err != nil {
-			log.Printf("job %s: test runner failed: %v", job_id, err)
+			log.Printf("job %s: test runner failed: %v", jobId, err)
 			jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("test runner error: %v", err)})
 			cancelJob()
+			stopHeartbeat()
 			continue
 		}
 
@@ -157,8 +203,9 @@ func (w *Worker) Start(ctx context.Context) {
 		log.Printf("job status: %v", status)
 		jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("job finished: %s", status)})
 
-		// Final flush
+		// Flush logs then stop heartbeat
 		cancelJob()
+		stopHeartbeat()
 
 		// Update job status
 		updateCtx, cancelUpdate := context.WithTimeout(ctx, 5*time.Second)
@@ -166,16 +213,16 @@ func (w *Worker) Start(ctx context.Context) {
 			Method:     "update",
 			EntityName: "job",
 			EntityData: map[string]any{
-				"job_id":      job_id,
+				"job_id":      jobId,
 				"status":      status,
 				"finished_at": time.Now().UTC(),
 			},
 		}, nil)
 		cancelUpdate()
 		if err != nil {
-			log.Printf("job %s: database service update failed: %v", job_id, err)
+			log.Printf("job %s: database service update failed: %v", jobId, err)
 			continue
 		}
-		log.Printf("job %s: status updated successfully", job_id)
+		log.Printf("job %s: status updated successfully", jobId)
 	}
 }

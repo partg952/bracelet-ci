@@ -31,6 +31,6 @@ func main() {
 	}
 	client := redis.NewClient(redisOptions)
 	log.Printf("Redis Client created\n")
-	worker := worker.New(client, dbServiceURL, "job_queue", 0)
-	worker.Start(context.Background())
+	w := worker.New(client, dbServiceURL, "job_queue", 0)
+	w.Start(context.Background())
 }
