@@ -5,6 +5,7 @@ import type {
   Project,
   ProjectDetails,
   Job,
+  JobLog,
 } from './types'
 
 const BASE = '/api'
@@ -118,6 +119,17 @@ export async function getJob(jobId: string): Promise<Job> {
   return event<Job>({
     method: 'read',
     entity_name: 'job',
+    entity_data: { job_id: jobId },
+  })
+}
+
+// ─── Job logs ─────────────────────────────────────────────────────────────────
+
+export async function getLogsByJob(jobId: string): Promise<JobLog[]> {
+  return event<JobLog[]>({
+    method: 'query',
+    entity_name: 'job_log',
+    operation: 'get_by_job_id',
     entity_data: { job_id: jobId },
   })
 }

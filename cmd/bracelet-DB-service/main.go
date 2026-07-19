@@ -132,6 +132,17 @@ func main() {
 			}
 		}
 
+		if parsedEvent.EntityName == "job_log" {
+			jobLog, ok := parsedEvent.EntityData.(models.JobLog)
+			if !ok {
+				ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid job_log event data"})
+				return
+			}
+			if jobLog.JobId != "" {
+				projectId = projectIdForJobEvent(&dbInstance, models.Job{JobId: jobLog.JobId})
+			}
+		}
+
 		result, err := parsedEvent.Execute(&dbInstance)
 		if err != nil {
 			log.Printf("[Event Execution error] %v", err)

@@ -34,10 +34,17 @@ export interface Job {
   status: string | null
 }
 
+export interface JobLog {
+  log_id: string
+  job_id: string
+  log_data: string
+  created_at: string
+}
+
 // ─── API wire types ───────────────────────────────────────────────────────────
 
 export type Method = 'create' | 'read' | 'update' | 'delete' | 'query'
-export type EntityName = 'user' | 'project' | 'job'
+export type EntityName = 'user' | 'project' | 'job' | 'job_log'
 
 export interface RawEvent {
   method: Method

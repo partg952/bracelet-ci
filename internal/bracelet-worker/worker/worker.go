@@ -1,15 +1,14 @@
 package worker
 
 import (
+	"bracelet-cicd/internal/bracelet-worker/dbclient"
 	dockerexecutors "bracelet-cicd/internal/bracelet-worker/docker-executors"
+	worklogs "bracelet-cicd/internal/bracelet-worker/logs"
 	"bracelet-cicd/internal/bracelet-worker/parser"
 	"bracelet-cicd/internal/bracelet-worker/repository"
 	"bracelet-cicd/internal/bracelet-worker/testrunner"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -22,9 +21,9 @@ type Worker struct {
 	redisClient *redis.Client
 	queue       string
 	timeout     time.Duration
-	dbService   string
-	httpClient  *http.Client
+	db          *dbclient.Client
 }
+
 type Status string
 
 const (
@@ -38,11 +37,6 @@ type JobDetails struct {
 	RepoUrl   string `json:"repo_url"`
 	CommitSHA string `json:"commit_sha"`
 }
-type DBEvent struct {
-	Method     string `json:"method"`
-	EntityName string `json:"entity_name"`
-	EntityData any    `json:"entity_data"`
-}
 
 func New(redisClient *redis.Client, dbService string, queue string, timeout time.Duration) *Worker {
 	if redisClient == nil {
@@ -55,56 +49,20 @@ func New(redisClient *redis.Client, dbService string, queue string, timeout time
 		log.Fatal("queue name is required")
 	}
 
+	httpClient := &http.Client{Timeout: 10 * time.Second}
 	return &Worker{
 		redisClient: redisClient,
 		queue:       queue,
 		timeout:     timeout,
-		dbService:   strings.TrimRight(dbService, "/"),
-		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		db:          dbclient.New(dbService, httpClient),
 	}
 }
 
-func (w *Worker) SendDBEvent(ctx context.Context, event DBEvent, result any) error {
-	payload, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		w.dbService+"/event",
-		bytes.NewReader(payload),
-	)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := w.httpClient.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("database service returned %s: %s", response.Status, strings.TrimSpace(string(body)))
-	}
-	if result == nil || len(bytes.TrimSpace(body)) == 0 || string(bytes.TrimSpace(body)) == "null" {
-		return nil
-	}
-
-	return json.Unmarshal(body, result)
+func (w *Worker) SendDBEvent(ctx context.Context, event dbclient.DBEvent, result any) error {
+	return w.db.Send(ctx, event, result)
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	go func() {
-
-	}()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -125,58 +83,86 @@ func (w *Worker) Start(ctx context.Context) {
 		job_id := values[1]
 		log.Printf("received queue message: %s", job_id)
 
+		jobCtx, cancelJob := context.WithCancel(ctx)
+		jobLog := worklogs.New(job_id, w.db)
+		jobLog.StartFlusher(jobCtx)
+
 		runningCtx, cancelRunning := context.WithTimeout(ctx, 5*time.Second)
-		_ = w.SendDBEvent(runningCtx, DBEvent{
+		_ = w.db.Send(runningCtx, dbclient.DBEvent{
 			Method:     "update",
 			EntityName: "job",
-			EntityData: map[string]any{
-				"job_id": job_id,
-				"status": Running,
-			},
+			EntityData: map[string]any{"job_id": job_id, "status": Running},
 		}, nil)
 		cancelRunning()
 
-		fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		fetchCtx, cancelFetch := context.WithTimeout(ctx, 5*time.Second)
 		var data JobDetails
-		err = w.SendDBEvent(fetchCtx, DBEvent{
+		err = w.db.Send(fetchCtx, dbclient.DBEvent{
 			Method:     "read",
 			EntityName: "job",
 			EntityData: map[string]any{"job_id": job_id},
 		}, &data)
-		cancel()
+		cancelFetch()
 		if err != nil {
 			log.Printf("job %s: database service read failed: %v", job_id, err)
-			continue
-		}
-		pathname, err := repository.Clone(data.RepoUrl, data.CommitSHA)
-		if err != nil {
-			log.Printf("job %s: repository clone failed: %v", job_id, err)
+			cancelJob()
 			continue
 		}
 
-		log.Printf("Successfully cloned the repo : %v", pathname)
+		// Clone
+		jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("cloning %s @ %s", data.RepoUrl, data.CommitSHA)})
+		pathname, cloneOutput, err := repository.Clone(data.RepoUrl, data.CommitSHA)
+		for _, line := range strings.Split(strings.TrimSpace(cloneOutput), "\n") {
+			if strings.TrimSpace(line) != "" {
+				jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: line})
+			}
+		}
+		if err != nil {
+			log.Printf("job %s: repository clone failed: %v", job_id, err)
+			jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("clone failed: %v", err)})
+			cancelJob()
+			continue
+		}
+		log.Printf("successfully cloned the repo: %v", pathname)
+
+		// Parse YAML
 		parsedYaml, err := parser.ParseYaml(pathname)
 		if err != nil {
 			log.Printf("job %s: yaml parse failed: %v", job_id, err)
+			jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("yaml parse failed: %v", err)})
+			cancelJob()
 			continue
 		}
 
+		// Run tests
+		jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: "starting test runner"})
 		dockerInst := dockerexecutors.New(job_id, pathname)
 		testResults, err := testrunner.Run(&dockerInst, parsedYaml)
+		for _, line := range strings.Split(strings.TrimSpace(testResults.Output), "\n") {
+			if strings.TrimSpace(line) != "" {
+				jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: line})
+			}
+		}
 		if err != nil {
 			log.Printf("job %s: test runner failed: %v", job_id, err)
+			jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("test runner error: %v", err)})
+			cancelJob()
 			continue
 		}
 
 		status := Failed
-
 		if testResults.Passed {
 			status = Passed
 		}
-		log.Printf("Job Status : %v", status)
+		log.Printf("job status: %v", status)
+		jobLog.Push(worklogs.Log{Timestamp: time.Now(), Contents: fmt.Sprintf("job finished: %s", status)})
 
-		updateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = w.SendDBEvent(updateCtx, DBEvent{
+		// Final flush
+		cancelJob()
+
+		// Update job status
+		updateCtx, cancelUpdate := context.WithTimeout(ctx, 5*time.Second)
+		err = w.db.Send(updateCtx, dbclient.DBEvent{
 			Method:     "update",
 			EntityName: "job",
 			EntityData: map[string]any{
@@ -185,7 +171,7 @@ func (w *Worker) Start(ctx context.Context) {
 				"finished_at": time.Now().UTC(),
 			},
 		}, nil)
-		cancel()
+		cancelUpdate()
 		if err != nil {
 			log.Printf("job %s: database service update failed: %v", job_id, err)
 			continue

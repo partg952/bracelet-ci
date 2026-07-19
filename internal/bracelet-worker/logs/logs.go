@@ -1,59 +1,99 @@
 package logs
 
 import (
-	"bracelet-cicd/internal/bracelet-worker/worker"
+	"bracelet-cicd/internal/bracelet-worker/dbclient"
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+const flushSize = 10
+
 type Logs struct {
-	mu sync.Mutex
+	mu     sync.Mutex
 	buffer []Log
 	jobId  string
+	client *dbclient.Client
 }
 
 type Log struct {
-	timestamp time.Time
-	contents  string
+	Timestamp time.Time
+	Contents  string
 }
 
-func New(jobId string) *Logs {
+func New(jobId string, client *dbclient.Client) *Logs {
 	return &Logs{
-		buffer: []Log{},
+		buffer: make([]Log, 0, flushSize),
 		jobId:  jobId,
+		client: client,
 	}
 }
 
-func (l *Logs) Flush(dbWorker *worker.Worker) error {
+// Push appends a log line. Triggers a flush if the buffer hits flushSize.
+func (l *Logs) Push(entry Log) {
+	l.mu.Lock()
+	l.buffer = append(l.buffer, entry)
+	ready := len(l.buffer) >= flushSize
+	l.mu.Unlock()
+
+	if ready {
+		_ = l.Flush()
+	}
+}
+
+// Flush sends all buffered lines as a single chunk to the DB service.
+func (l *Logs) Flush() error {
+	l.mu.Lock()
+	if len(l.buffer) == 0 {
+		l.mu.Unlock()
+		return nil
+	}
+	pending := append([]Log(nil), l.buffer...)
+	l.buffer = l.buffer[:0]
+	l.mu.Unlock()
+
+	lines := make([]string, len(pending))
+	for i, entry := range pending {
+		ts := entry.Timestamp
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+		lines[i] = fmt.Sprintf("[%s] %s", ts.UTC().Format(time.RFC3339), entry.Contents)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	for _, log := range l.buffer {
-		content := log.contents
-		createdAt := log.timestamp
-		if err := dbWorker.SendDBEvent(ctx, worker.DBEvent{
-			Method:     "create",
-			EntityName: "job_log",
-			EntityData: map[string]any{
-				"log_id":     uuid.NewString(),
-				"job_id":     l.jobId,
-				"log_data":   content,
-				"created_at": createdAt,
-			},
-		}, nil); err != nil {
-			return err
-		}
-	}
-
-	l.buffer = l.buffer[:0]
-	return nil
+	return l.client.Send(ctx, dbclient.DBEvent{
+		Method:     "create",
+		EntityName: "job_log",
+		EntityData: map[string]any{
+			"log_id":     uuid.NewString(),
+			"job_id":     l.jobId,
+			"log_data":   strings.Join(lines, "\n"),
+			"created_at": pending[0].Timestamp.UTC(),
+		},
+	}, nil)
 }
 
-func (l *Logs) Push(log Log) {
-	l.mu.Lock()
-	l.buffer = append(l.buffer, log)
-	l.mu.Unlock()
+// StartFlusher flushes every 10 seconds and performs a final flush on ctx cancel.
+func (l *Logs) StartFlusher(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				_ = l.Flush()
+				return
+			case <-ticker.C:
+				_ = l.Flush()
+			}
+		}
+	}()
 }
