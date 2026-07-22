@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,14 +13,22 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"bracelet-cicd/internal/bracelet-ci/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
+	"github.com/spf13/cobra"
 )
+
+//go:embed docker-compose.yml
+var embeddedCompose []byte
 
 const heartbeatPrefix = "heartbeat:"
 
@@ -220,10 +231,240 @@ func webhookHandler(dbServiceURL string, client *redis.Client) gin.HandlerFunc {
 	}
 }
 
-func init() {
-	godotenv.Load("../../.env")
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
+
+
+var rootCmd = &cobra.Command{
+	Use:   "bracelet-ci",
+	Short: "braceletCI — self-hosted CI orchestrator",
+}
+
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Generate secrets and write ~/.bracelet-ci/.env and docker-compose.yml",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		envPath, _ := config.EnvFilePath()
+		composePath, _ := config.ComposeFilePath()
+		cfgPath, _ := config.Path()
+
+		if _, err := os.Stat(envPath); err == nil {
+			if _, err := os.Stat(composePath); err == nil {
+				if _, err := os.Stat(cfgPath); err == nil {
+					fmt.Println("braceletCI already initialised.")
+					fmt.Printf("  Config:        %s\n", cfgPath)
+					fmt.Printf("  Env file:      %s\n", envPath)
+					fmt.Printf("  Compose file:  %s\n", composePath)
+					return nil
+				}
+			}
+		}
+
+		workerToken, err := randomHex(32)
+		if err != nil {
+			return fmt.Errorf("failed to generate worker token: %w", err)
+		}
+		redisPassword, err := randomHex(24)
+		if err != nil {
+			return fmt.Errorf("failed to generate redis password: %w", err)
+		}
+		postgresPassword, err := randomHex(16)
+		if err != nil {
+			return fmt.Errorf("failed to generate postgres password: %w", err)
+		}
+
+		postgresDSN := fmt.Sprintf(
+			"postgres://bracelet:%s@localhost:5432/bracelet?sslmode=disable",
+			postgresPassword,
+		)
+		redisURL := fmt.Sprintf("redis://:%s@localhost:6379", redisPassword)
+
+		dir, err := config.Dir()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return fmt.Errorf("failed to create config dir: %w", err)
+		}
+
+		envContent := fmt.Sprintf(
+			"WORKER_TOKEN=%s\nREDIS_PASSWORD=%s\nREDIS_URL=%s\nPOSTGRES_PASSWORD=%s\nDATABASE_URL=%s\n",
+			workerToken, redisPassword, redisURL, postgresPassword, postgresDSN,
+		)
+		if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+			return fmt.Errorf("failed to write .env: %w", err)
+		}
+
+		if err := os.WriteFile(composePath, embeddedCompose, 0644); err != nil {
+			return fmt.Errorf("failed to write docker-compose.yml: %w", err)
+		}
+
+		cfg := config.Config{
+			WorkerToken:      workerToken,
+			RedisPassword:    redisPassword,
+			RedisURL:         redisURL,
+			PostgresPassword: postgresPassword,
+			PostgresDSN:      postgresDSN,
+		}
+		if err := config.Save(cfg); err != nil {
+			return fmt.Errorf("failed to save config: %w", err)
+		}
+
+		fmt.Println("braceletCI initialised.")
+		fmt.Printf("  Config:        %s\n", cfgPath)
+		fmt.Printf("  Env file:      %s\n", envPath)
+		fmt.Printf("  Compose file:  %s\n", composePath)
+		fmt.Println()
+		fmt.Println("Next: run `bracelet-ci up` to start Redis, Postgres, and the DB service.")
+		return nil
+	},
+}
+
+var upCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Start Redis, Postgres, and bracelet-db-service, then run the webhook server",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		envPath, err := config.EnvFilePath()
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			return fmt.Errorf("no env file found — run `bracelet-ci init` first")
+		}
+
+		composePath, err := config.ComposeFilePath()
+		if err != nil {
+			return err
+		}
+
+		fmt.Println("Starting Redis and Postgres...")
+		compose := exec.Command("docker", "compose",
+			"--env-file", envPath,
+			"-f", composePath,
+			"up", "-d",
+		)
+		compose.Stdout = os.Stdout
+		compose.Stderr = os.Stderr
+		if err := compose.Run(); err != nil {
+			return fmt.Errorf("docker compose up failed: %w", err)
+		}
+
+		dir, _ := config.Dir()
+		logFile, err := os.OpenFile(
+			filepath.Join(dir, "db-service.log"),
+			os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to open db-service log: %w", err)
+		}
+
+		dbSvc := exec.Command("/home/parthsharma/bracelet-cicd/cmd/bracelet-DB-service/bracelet-DB-service", "start")
+		dbSvc.Env = append(os.Environ(), "GODOTENV_PATH="+envPath)
+		dbSvc.Stdout = logFile
+		dbSvc.Stderr = logFile
+		if err := dbSvc.Start(); err != nil {
+			return fmt.Errorf("failed to start bracelet-db-service: %w", err)
+		}
+
+		pidPath := filepath.Join(dir, "db-service.pid")
+		if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", dbSvc.Process.Pid)), 0644); err != nil {
+			return fmt.Errorf("failed to write pid file: %w", err)
+		}
+
+		fmt.Printf("bracelet-db-service started (pid %d) — logs at %s\n", dbSvc.Process.Pid, filepath.Join(dir, "db-service.log"))
+		fmt.Println("Starting webhook server on :8080...")
+
+		runServer()
+		return nil
+	},
+}
+
+var downCmd = &cobra.Command{
+	Use:   "down",
+	Short: "Stop bracelet-db-service and shut down Redis and Postgres",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dir, err := config.Dir()
+		if err != nil {
+			return err
+		}
+
+		pidPath := filepath.Join(dir, "db-service.pid")
+		pidBytes, err := os.ReadFile(pidPath)
+		if err == nil {
+			var pid int
+			if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err == nil {
+				if proc, err := os.FindProcess(pid); err == nil {
+					proc.Signal(os.Interrupt)
+					fmt.Printf("Stopped bracelet-db-service (pid %d)\n", pid)
+				}
+			}
+			os.Remove(pidPath)
+		}
+
+		envPath, _ := config.EnvFilePath()
+		composePath, _ := config.ComposeFilePath()
+		compose := exec.Command("docker", "compose",
+			"--env-file", envPath,
+			"-f", composePath,
+			"down",
+		)
+		compose.Stdout = os.Stdout
+		compose.Stderr = os.Stderr
+		if err := compose.Run(); err != nil {
+			return fmt.Errorf("docker compose down failed: %w", err)
+		}
+
+		fmt.Println("Done.")
+		return nil
+	},
+}
+
+var statusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show status of braceletCI services",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dir, _ := config.Dir()
+		pidPath := filepath.Join(dir, "db-service.pid")
+		pidBytes, err := os.ReadFile(pidPath)
+		if err == nil {
+			fmt.Printf("bracelet-db-service pid: %s\n", strings.TrimSpace(string(pidBytes)))
+		} else {
+			fmt.Println("bracelet-db-service: not running")
+		}
+
+		envPath, _ := config.EnvFilePath()
+		composePath, _ := config.ComposeFilePath()
+		compose := exec.Command("docker", "compose",
+			"--env-file", envPath,
+			"-f", composePath,
+			"ps",
+		)
+		compose.Stdout = os.Stdout
+		compose.Stderr = os.Stderr
+		return compose.Run()
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(initCmd, upCmd, downCmd, statusCmd)
+}
+
 func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+
+func runServer() {
+	godotenv.Load(envFilePath())
+
 	dbServiceURL := os.Getenv("DB_SERVICE_URL")
 	if dbServiceURL == "" {
 		dbServiceURL = "http://localhost:8081"
@@ -239,8 +480,14 @@ func main() {
 	go watchExpiredHeartbeats(context.Background(), client, "job_queue")
 
 	r := gin.Default()
-
 	r.POST("/webhook", webhookHandler(dbServiceURL, client))
-
 	r.Run()
+}
+
+func envFilePath() string {
+	p, err := config.EnvFilePath()
+	if err != nil {
+		return ""
+	}
+	return p
 }

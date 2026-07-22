@@ -7,18 +7,25 @@ import (
 	"bracelet-cicd/internal/bracelet-DB-service/parser"
 	"bracelet-cicd/internal/bracelet-DB-service/util"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/spf13/cobra"
 )
 
-func init() {
-	_ = godotenv.Load("../../.env")
+func envFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".bracelet-ci", ".env")
 }
 
 func projectIdForJobEvent(database *dbpkg.DBInstance, job models.Job) string {
@@ -54,7 +61,9 @@ func projectIdForJobEvent(database *dbpkg.DBInstance, job models.Job) string {
 	return *projectId
 }
 
-func main() {
+func runServer(port string) {
+	godotenv.Load(envFilePath())
+
 	dbInstance, err := dbpkg.New(os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatalf("Database connection failed: %v", err)
@@ -163,5 +172,34 @@ func main() {
 		ctx.JSON(http.StatusOK, result)
 	})
 
-	r.Run(":8081")
+	addr := fmt.Sprintf(":%s", port)
+	log.Printf("[bracelet-db-service] listening on %s", addr)
+	r.Run(addr)
 }
+
+var rootCmd = &cobra.Command{
+	Use:   "bracelet-db-service",
+	Short: "braceletCI database event and SSE service",
+}
+
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the bracelet-db-service HTTP server",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		port, _ := cmd.Flags().GetString("port")
+		runServer(port)
+		return nil
+	},
+}
+
+func init() {
+	startCmd.Flags().String("port", "8081", "Port to listen on")
+	rootCmd.AddCommand(startCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
