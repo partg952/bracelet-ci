@@ -77,7 +77,7 @@ BraceletCI is a self-hosted CI system designed with scalability and service isol
               │
       Update Database
               │
-      Broadcast WebSocket
+      Server Side Events 
               │
               ▼
           Dashboard
@@ -140,7 +140,7 @@ The DB Service is the single owner of the PostgreSQL database.
 | Queue | **Redis** |
 | Database | **PostgreSQL** |
 | Containers | **Docker** |
-| Realtime | **WebSockets** |
+| Realtime | **SSE** |
 | Version Control | GitHub |
 | API | REST |
 
@@ -228,7 +228,7 @@ BraceletCI is designed so that every component can be scaled independently.
 - [x] Distributed workers
 - [x] Docker execution
 - [x] Event-driven DB Service
-- [ ] Real-time dashboard
+- [x] Real-time dashboard
 - [ ] GitHub App authentication
 - [ ] Pipeline artifacts
 - [ ] Pipeline caching
