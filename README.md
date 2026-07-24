@@ -13,7 +13,7 @@
 
 BraceletCI is a self-hosted CI system designed with scalability and service isolation in mind. Instead of a monolithic architecture, BraceletCI separates responsibilities into dedicated services that communicate through events and APIs.
 
-## ✨ Features
+## Features
 
 - Event-driven architecture
 - Distributed worker execution
@@ -27,7 +27,7 @@ BraceletCI is a self-hosted CI system designed with scalability and service isol
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 <div align="center">
   <img
@@ -40,52 +40,7 @@ BraceletCI is a self-hosted CI system designed with scalability and service isol
 </div>
 
 <br />
-
-```text
-                    GitHub
-                       │
-                 Webhook Event
-                       │
-                       ▼
-                BraceletCI API
-                       │
-             Create Job Event
-                       │
-                       ▼
-                   DB Service
-                       │
-             Persist Job Record
-                       │
-                 Push Job ID
-                       │
-                    Redis Queue
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-         Worker #1         Worker #2
-              │                 │
-      Clone Repository   Clone Repository
-              │                 │
-       Build Docker Image Build Docker Image
-              │                 │
-       Execute Pipeline  Execute Pipeline
-              │                 │
-       Send Events via HTTP
-              │
-              ▼
-           DB Service
-              │
-      Update Database
-              │
-      Server Side Events 
-              │
-              ▼
-          Dashboard
-```
-
----
-
-## 🧩 Services
+## Services
 
 ### BraceletCI API Service
 
@@ -130,54 +85,6 @@ Responsible for:
 
 The DB Service is the single owner of the PostgreSQL database.
 
----
-
-## 🛠️ Tech Stack
-
-| Component | Technology |
-| :--- | :--- |
-| Language | **Go** |
-| Queue | **Redis** |
-| Database | **PostgreSQL** |
-| Containers | **Docker** |
-| Realtime | **SSE** |
-| Version Control | GitHub |
-| API | REST |
-
----
-
-## 📁 Project Structure
-
-```text
-bracelet-cicd/
-├── cmd/
-│   ├── bracelet-ci/            # Main API and GitHub push webhook
-│   │   └── main.go
-│   ├── bracelet-DB-service/    # Database service
-│   │   └── main.go
-│   └── bracelet-worker/        # CI worker service
-│       └── main.go
-│
-├── internal/
-│   ├── bracelet-DB-service/
-│   │   ├── db/                 # PostgreSQL connection and queries
-│   │   ├── db-actions/         # User, project, and job operations
-│   │   ├── models/             # Database entity models
-│   │   └── parser/             # Incoming event parser
-│   │
-│   └── bracelet-worker/
-│       ├── docker-executors/   # Docker image build and execution
-│       ├── repository/         # Git repository cloning
-│       ├── testrunner/         # Pipeline test execution
-│       └── worker/             # Redis queue consumer
-│
-├── .env                        # Local environment variables
-├── go.mod                      # Go module definition
-├── go.sum                      # Dependency checksums
-└── README.md
-```
-
----
 
 ## 🔄 Pipeline Flow
 
@@ -208,50 +115,6 @@ Examples of events include:
 
 Writes are processed through events, while relational reads are served synchronously by the DB Service.
 
----
-
-## 📈 Scalability
-
-BraceletCI is designed so that every component can be scaled independently.
-
-- Multiple BraceletCI API instances
-- Multiple workers
-- Shared Redis queue
-- Shared PostgreSQL database
-- Stateless workers
-- Independent DB Service
-
----
-
-## 🗺️ Roadmap
-
-- [x] Distributed workers
-- [x] Docker execution
-- [x] Event-driven DB Service
-- [x] Real-time dashboard
-- [ ] GitHub App authentication
-- [ ] Pipeline artifacts
-- [ ] Pipeline caching
-- [ ] Parallel job execution
-- [ ] Secrets management
-- [ ] Multi-stage pipelines
-- [ ] Pipeline templates
-- [ ] Kubernetes executor
-
----
-
-## 💡 Inspiration
-
-BraceletCI draws inspiration from modern CI/CD systems such as:
-
-- GitHub Actions
-- GitLab CI
-- Buildkite
-- Drone CI
-
-while exploring a service-oriented, event-driven architecture implemented entirely in Go.
-
----
 
 ## 📄 License
 
