@@ -86,7 +86,7 @@ Responsible for:
 The DB Service is the single owner of the PostgreSQL database.
 
 
-## 🔄 Pipeline Flow
+## Pipeline Flow
 
 1. User registers a GitHub repository.
 2. GitHub sends the push event to the BraceletCI API webhook.
@@ -103,7 +103,7 @@ The DB Service is the single owner of the PostgreSQL database.
 
 ---
 
-## ⚡ Event-Driven Design
+## Event-Driven Design
 
 BraceletCI uses an event-driven write model.
 
